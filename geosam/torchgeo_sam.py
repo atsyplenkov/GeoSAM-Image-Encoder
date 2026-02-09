@@ -43,6 +43,23 @@ def _is_non_interleaved_index(index: Any) -> bool:
     return False
 
 
+def _to_float_or_default(value: Any, default: float) -> float:
+    if value is None:
+        return default
+    if isinstance(value, pd.Timestamp):
+        return float(value.value)
+    if isinstance(value, np.datetime64):
+        return float(pd.Timestamp(value).value)
+    if isinstance(value, pd.Timedelta):
+        return float(value.value)
+    if isinstance(value, np.timedelta64):
+        return float(pd.Timedelta(value).value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_index_bounds(
     index_bounds: Any,
     index: Optional[Any] = None,
@@ -57,20 +74,23 @@ def get_index_bounds(
         miny = float(index_bounds["miny"].min())
         maxy = float(index_bounds["maxy"].max())
         if {"mint", "maxt"}.issubset(index_bounds.columns):
-            mint = float(index_bounds["mint"].min())
-            maxt = float(index_bounds["maxt"].max())
+            mint = _to_float_or_default(index_bounds["mint"].min(), default[4])
+            maxt = _to_float_or_default(index_bounds["maxt"].max(), default[5])
         else:
             mint, maxt = default[4], default[5]
             index_values = index_bounds.index
             if hasattr(index_values, "left") and hasattr(index_values, "right"):
                 if len(index_values) > 0:
-                    mint = float(np.min(index_values.left))
-                    maxt = float(np.max(index_values.right))
+                    mint = _to_float_or_default(np.min(index_values.left), default[4])
+                    maxt = _to_float_or_default(np.max(index_values.right), default[5])
         return (minx, maxx, miny, maxy, mint, maxt)
 
     if hasattr(index_bounds, "minx") and hasattr(index_bounds, "maxx"):
-        mint = float(getattr(index_bounds, "mint", 0.0))
-        maxt = float(getattr(index_bounds, "maxt", float(sys.maxsize)))
+        mint = _to_float_or_default(getattr(index_bounds, "mint", 0.0), 0.0)
+        maxt = _to_float_or_default(
+            getattr(index_bounds, "maxt", float(sys.maxsize)),
+            float(sys.maxsize),
+        )
         return (
             float(index_bounds.minx),
             float(index_bounds.maxx),
@@ -143,8 +163,8 @@ def _coerce_roi(roi: Optional[BoundingBox], index: Any) -> BoundingBox:
             float(roi.maxx),
             float(roi.miny),
             float(roi.maxy),
-            float(getattr(roi, "mint", mint)),
-            float(getattr(roi, "maxt", maxt)),
+            _to_float_or_default(getattr(roi, "mint", mint), mint),
+            _to_float_or_default(getattr(roi, "maxt", maxt), maxt),
         )
     if isinstance(roi, (list, tuple)):
         if len(roi) >= 6:
@@ -222,8 +242,8 @@ def _coerce_hit_bounds(
             float(hit_bounds.maxx),
             float(hit_bounds.miny),
             float(hit_bounds.maxy),
-            float(getattr(hit_bounds, "mint", default_mint)),
-            float(getattr(hit_bounds, "maxt", default_maxt)),
+            _to_float_or_default(getattr(hit_bounds, "mint", default_mint), default_mint),
+            _to_float_or_default(getattr(hit_bounds, "maxt", default_maxt), default_maxt),
         )
     raise TypeError("Unsupported intersection hit bounds format")
 
@@ -316,8 +336,12 @@ def _hit_from_index_df(
         float(row["maxx"]),
         float(row["miny"]),
         float(row["maxy"]),
-        float(row["mint"]) if "mint" in row.index and pd.notna(row["mint"]) else default_mint,
-        float(row["maxt"]) if "maxt" in row.index and pd.notna(row["maxt"]) else default_maxt,
+        _to_float_or_default(row["mint"], default_mint)
+        if "mint" in row.index and pd.notna(row["mint"])
+        else default_mint,
+        _to_float_or_default(row["maxt"], default_maxt)
+        if "maxt" in row.index and pd.notna(row["maxt"])
+        else default_maxt,
     )
 
     path = None
