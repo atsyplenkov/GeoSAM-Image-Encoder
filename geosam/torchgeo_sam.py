@@ -60,6 +60,17 @@ def _to_float_or_default(value: Any, default: float) -> float:
         return default
 
 
+def _resolution_xy(res: Any) -> Tuple[float, float]:
+    if isinstance(res, (list, tuple, np.ndarray)):
+        if len(res) >= 2:
+            return abs(float(res[0])), abs(float(res[1]))
+        if len(res) == 1:
+            val = abs(float(res[0]))
+            return val, val
+    val = abs(float(res))
+    return val, val
+
+
 def get_index_bounds(
     index_bounds: Any,
     index: Optional[Any] = None,
@@ -486,9 +497,10 @@ class SamTestGridGeoSampler(GeoSampler):
         self.stride = _to_tuple(stride)
 
         if units == Units.PIXELS:
-            self.size = (self.size[0] * self.res, self.size[1] * self.res)
-            self.stride = (self.stride[0] * self.res,
-                           self.stride[1] * self.res)
+            res_x, res_y = _resolution_xy(self.res)
+            self.size = (self.size[0] * res_y, self.size[1] * res_x)
+            self.stride = (self.stride[0] * res_y,
+                           self.stride[1] * res_x)
 
         self.hits = []
         self.hits_small = []
