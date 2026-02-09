@@ -24,6 +24,291 @@ import matplotlib.pyplot as plt
 from rtree.index import Index, Property
 
 
+class _IntersectionHit:
+    def __init__(
+        self,
+        bounds: Tuple[float, float, float, float, float, float],
+        path: Optional[str],
+    ) -> None:
+        self.bounds = bounds
+        self.object = path
+
+
+def _is_non_interleaved_index(index: Any) -> bool:
+    if hasattr(index, "interleaved"):
+        return not bool(getattr(index, "interleaved"))
+    props = getattr(index, "properties", None)
+    if props is not None and hasattr(props, "interleaved"):
+        return not bool(props.interleaved)
+    return False
+
+
+def get_index_bounds(
+    index_bounds: Any,
+    index: Optional[Any] = None,
+) -> Tuple[float, float, float, float, float, float]:
+    default = (0.0, 0.0, 0.0, 0.0, 0.0, float(sys.maxsize))
+
+    if hasattr(index_bounds, "minx") and hasattr(index_bounds, "maxx"):
+        mint = float(getattr(index_bounds, "mint", 0.0))
+        maxt = float(getattr(index_bounds, "maxt", float(sys.maxsize)))
+        return (
+            float(index_bounds.minx),
+            float(index_bounds.maxx),
+            float(index_bounds.miny),
+            float(index_bounds.maxy),
+            mint,
+            maxt,
+        )
+
+    if isinstance(index_bounds, pd.DataFrame):
+        if index_bounds.empty:
+            return default
+        minx = float(index_bounds["minx"].min())
+        maxx = float(index_bounds["maxx"].max())
+        miny = float(index_bounds["miny"].min())
+        maxy = float(index_bounds["maxy"].max())
+        if {"mint", "maxt"}.issubset(index_bounds.columns):
+            mint = float(index_bounds["mint"].min())
+            maxt = float(index_bounds["maxt"].max())
+        else:
+            mint, maxt = default[4], default[5]
+            index_values = index_bounds.index
+            if hasattr(index_values, "left") and hasattr(index_values, "right"):
+                if len(index_values) > 0:
+                    mint = float(np.min(index_values.left))
+                    maxt = float(np.max(index_values.right))
+        return (minx, maxx, miny, maxy, mint, maxt)
+
+    if isinstance(index_bounds, (list, tuple)):
+        if len(index_bounds) >= 6:
+            if index is None or _is_non_interleaved_index(index):
+                return (
+                    float(index_bounds[0]),
+                    float(index_bounds[1]),
+                    float(index_bounds[2]),
+                    float(index_bounds[3]),
+                    float(index_bounds[4]),
+                    float(index_bounds[5]),
+                )
+            # interleaved order: (minx, miny, mint, maxx, maxy, maxt)
+            return (
+                float(index_bounds[0]),
+                float(index_bounds[3]),
+                float(index_bounds[1]),
+                float(index_bounds[4]),
+                float(index_bounds[2]),
+                float(index_bounds[5]),
+            )
+        if len(index_bounds) == 4:
+            if index is None or _is_non_interleaved_index(index):
+                # rtree (interleaved=False) order: (minx, maxx, miny, maxy)
+                return (
+                    float(index_bounds[0]),
+                    float(index_bounds[1]),
+                    float(index_bounds[2]),
+                    float(index_bounds[3]),
+                    default[4],
+                    default[5],
+                )
+            # interleaved/shapely order: (minx, miny, maxx, maxy)
+            return (
+                float(index_bounds[0]),
+                float(index_bounds[2]),
+                float(index_bounds[1]),
+                float(index_bounds[3]),
+                default[4],
+                default[5],
+            )
+
+    return default
+
+
+def get_index_mint_maxt(
+    index_bounds: Any, index: Optional[Any] = None
+) -> Tuple[float, float]:
+    _, _, _, _, mint, maxt = get_index_bounds(index_bounds, index=index)
+    return mint, maxt
+
+
+def _coerce_roi(roi: Optional[BoundingBox], index: Any) -> BoundingBox:
+    minx, maxx, miny, maxy, mint, maxt = get_index_bounds(index.bounds, index=index)
+    if roi is None:
+        return BoundingBox(minx, maxx, miny, maxy, mint, maxt)
+    if isinstance(roi, BoundingBox):
+        return roi
+    if hasattr(roi, "minx") and hasattr(roi, "maxx"):
+        return BoundingBox(
+            float(roi.minx),
+            float(roi.maxx),
+            float(roi.miny),
+            float(roi.maxy),
+            float(getattr(roi, "mint", mint)),
+            float(getattr(roi, "maxt", maxt)),
+        )
+    if isinstance(roi, (list, tuple)):
+        if len(roi) >= 6:
+            return BoundingBox(
+                float(roi[0]),
+                float(roi[1]),
+                float(roi[2]),
+                float(roi[3]),
+                float(roi[4]),
+                float(roi[5]),
+            )
+        if len(roi) == 4:
+            if _is_non_interleaved_index(index):
+                minx, maxx, miny, maxy = roi
+            else:
+                minx, miny, maxx, maxy = roi
+            return BoundingBox(
+                float(minx),
+                float(maxx),
+                float(miny),
+                float(maxy),
+                mint,
+                maxt,
+            )
+    raise TypeError("roi should be a BoundingBox-like object or tuple")
+
+
+def _coerce_hit_bounds(
+    hit_bounds: Any,
+    default_mint: float,
+    default_maxt: float,
+    non_interleaved: bool = False,
+) -> Tuple[float, float, float, float, float, float]:
+    if isinstance(hit_bounds, (list, tuple)):
+        if len(hit_bounds) >= 6:
+            if non_interleaved:
+                return (
+                    float(hit_bounds[0]),
+                    float(hit_bounds[1]),
+                    float(hit_bounds[2]),
+                    float(hit_bounds[3]),
+                    float(hit_bounds[4]),
+                    float(hit_bounds[5]),
+                )
+            # interleaved order: (minx, miny, mint, maxx, maxy, maxt)
+            return (
+                float(hit_bounds[0]),
+                float(hit_bounds[3]),
+                float(hit_bounds[1]),
+                float(hit_bounds[4]),
+                float(hit_bounds[2]),
+                float(hit_bounds[5]),
+            )
+        if len(hit_bounds) == 4:
+            if non_interleaved:
+                return (
+                    float(hit_bounds[0]),
+                    float(hit_bounds[1]),
+                    float(hit_bounds[2]),
+                    float(hit_bounds[3]),
+                    default_mint,
+                    default_maxt,
+                )
+            return (
+                float(hit_bounds[0]),
+                float(hit_bounds[2]),
+                float(hit_bounds[1]),
+                float(hit_bounds[3]),
+                default_mint,
+                default_maxt,
+            )
+    if hasattr(hit_bounds, "minx") and hasattr(hit_bounds, "maxx"):
+        return (
+            float(hit_bounds.minx),
+            float(hit_bounds.maxx),
+            float(hit_bounds.miny),
+            float(hit_bounds.maxy),
+            float(getattr(hit_bounds, "mint", default_mint)),
+            float(getattr(hit_bounds, "maxt", default_maxt)),
+        )
+    raise TypeError("Unsupported intersection hit bounds format")
+
+
+def _hit_from_index_df(
+    dataset: Any, hit_id: Any, default_mint: float, default_maxt: float
+) -> Optional[_IntersectionHit]:
+    index_df = getattr(dataset, "index_df", None)
+    if not isinstance(index_df, pd.DataFrame) or index_df.empty:
+        return None
+
+    row_df = pd.DataFrame()
+    if "id" in index_df.columns:
+        row_df = index_df.loc[index_df["id"] == hit_id]
+    if row_df.empty and hit_id in index_df.index:
+        row_df = index_df.loc[[hit_id]]
+    if row_df.empty:
+        return None
+
+    row = row_df.iloc[0]
+    bounds = (
+        float(row["minx"]),
+        float(row["maxx"]),
+        float(row["miny"]),
+        float(row["maxy"]),
+        float(row["mint"]) if "mint" in row.index and pd.notna(row["mint"]) else default_mint,
+        float(row["maxt"]) if "maxt" in row.index and pd.notna(row["maxt"]) else default_maxt,
+    )
+
+    path = None
+    if "filepath" in row.index and pd.notna(row["filepath"]):
+        path = str(row["filepath"])
+        root = getattr(dataset, "root", None)
+        if root and not os.path.isabs(path):
+            path = os.path.join(root, path)
+
+    return _IntersectionHit(bounds=bounds, path=path)
+
+
+def query_index_hits(
+    index: Any, roi: BoundingBox, dataset: Optional[Any] = None
+) -> List[Any]:
+    try:
+        return list(index.intersection(tuple(roi), objects=True))
+    except TypeError:
+        raw_hits = list(index.intersection(tuple(roi)))
+
+    hits = []
+    dropped_hits = 0
+    non_interleaved = _is_non_interleaved_index(index)
+    for raw_hit in raw_hits:
+        if hasattr(raw_hit, "bounds"):
+            bounds = _coerce_hit_bounds(
+                raw_hit.bounds,
+                roi.mint,
+                roi.maxt,
+                non_interleaved=non_interleaved,
+            )
+            hit_path = getattr(raw_hit, "object", None)
+            if hit_path is None and dataset is not None and hasattr(raw_hit, "id"):
+                rebuilt = _hit_from_index_df(dataset, raw_hit.id, roi.mint, roi.maxt)
+                if rebuilt is not None:
+                    hits.append(rebuilt)
+                    continue
+                dropped_hits += 1
+                continue
+            hits.append(_IntersectionHit(bounds=bounds, path=hit_path))
+            continue
+
+        if dataset is not None:
+            rebuilt = _hit_from_index_df(dataset, raw_hit, roi.mint, roi.maxt)
+            if rebuilt is not None:
+                hits.append(rebuilt)
+            else:
+                dropped_hits += 1
+
+    if raw_hits and not hits and dropped_hits:
+        raise RuntimeError(
+            "Index intersection fallback could not reconstruct hit metadata. "
+            "Need objects=True support or dataset.index_df with filepath/bounds."
+        )
+
+    return hits
+
+
 class SamTestGridGeoSampler(GeoSampler):
     """Samples elements in a grid-like fashion.
     accept image smaller than desired patch_size
@@ -57,7 +342,16 @@ class SamTestGridGeoSampler(GeoSampler):
                 (defaults to the bounds of ``dataset.index``)
             units: defines if ``size`` and ``stride`` are in pixel or CRS units
         """
-        super().__init__(dataset, roi)
+        roi = _coerce_roi(roi, dataset.index)
+        self.index = Index(interleaved=False, properties=Property(dimension=3))
+        for idx, hit in enumerate(query_index_hits(dataset.index, roi, dataset)):
+            hit_path = getattr(hit, "object", None)
+            if hit_path is None:
+                continue
+            bbox = BoundingBox(*hit.bounds) & roi
+            self.index.insert(idx, tuple(bbox), hit_path)
+        self.res = dataset.res
+        self.roi = roi
         self.size = _to_tuple(size)
         self.patch_size = self.size
         self.stride = _to_tuple(stride)

@@ -53,7 +53,11 @@ from tqdm import tqdm
 from segment_anything import sam_model_registry
 from segment_anything.modeling import Sam
 import torch
-from geosam.torchgeo_sam import SamTestGridGeoSampler, SamTestRasterDataset
+from geosam.torchgeo_sam import (
+    SamTestGridGeoSampler,
+    SamTestRasterDataset,
+    get_index_mint_maxt,
+)
 from torchgeo.samplers import Units
 from torchgeo.datasets import BoundingBox, stack_samples
 from torch.utils.data import DataLoader
@@ -287,13 +291,14 @@ class ImageEncoder:
             '\n----------------------------------------------\n'
         )
 
+        mint, maxt = get_index_mint_maxt(sam_ds.index.bounds, index=sam_ds.index)
         extent_bbox = BoundingBox(
             minx=extent[0],
             maxx=extent[2],
             miny=extent[1],
             maxy=extent[3],
-            mint=sam_ds.index.bounds[4],
-            maxt=sam_ds.index.bounds[5]
+            mint=mint,
+            maxt=maxt
         )
 
         ds_sampler = SamTestGridGeoSampler(
