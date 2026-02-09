@@ -49,18 +49,6 @@ def get_index_bounds(
 ) -> Tuple[float, float, float, float, float, float]:
     default = (0.0, 0.0, 0.0, 0.0, 0.0, float(sys.maxsize))
 
-    if hasattr(index_bounds, "minx") and hasattr(index_bounds, "maxx"):
-        mint = float(getattr(index_bounds, "mint", 0.0))
-        maxt = float(getattr(index_bounds, "maxt", float(sys.maxsize)))
-        return (
-            float(index_bounds.minx),
-            float(index_bounds.maxx),
-            float(index_bounds.miny),
-            float(index_bounds.maxy),
-            mint,
-            maxt,
-        )
-
     if isinstance(index_bounds, pd.DataFrame):
         if index_bounds.empty:
             return default
@@ -79,6 +67,18 @@ def get_index_bounds(
                     mint = float(np.min(index_values.left))
                     maxt = float(np.max(index_values.right))
         return (minx, maxx, miny, maxy, mint, maxt)
+
+    if hasattr(index_bounds, "minx") and hasattr(index_bounds, "maxx"):
+        mint = float(getattr(index_bounds, "mint", 0.0))
+        maxt = float(getattr(index_bounds, "maxt", float(sys.maxsize)))
+        return (
+            float(index_bounds.minx),
+            float(index_bounds.maxx),
+            float(index_bounds.miny),
+            float(index_bounds.maxy),
+            mint,
+            maxt,
+        )
 
     if isinstance(index_bounds, (list, tuple)):
         if len(index_bounds) >= 6:
@@ -229,11 +229,78 @@ def _coerce_hit_bounds(
 
 
 def _hit_from_index_df(
-    dataset: Any, hit_id: Any, default_mint: float, default_maxt: float
+    dataset: Any,
+    hit_id: Any,
+    default_mint: float,
+    default_maxt: float,
+    prefer_position: bool = False,
 ) -> Optional[_IntersectionHit]:
     index_df = getattr(dataset, "index_df", None)
     if not isinstance(index_df, pd.DataFrame) or index_df.empty:
-        return None
+        dataset_index = getattr(dataset, "index", None)
+        if dataset_index is None or not hasattr(dataset_index, "iloc"):
+            return None
+
+        hit_pos: Optional[int] = None
+        pos_candidates: List[int] = []
+        if prefer_position:
+            if isinstance(hit_id, (int, np.integer)):
+                raw_pos = int(hit_id)
+                if 0 <= raw_pos < len(dataset_index):
+                    pos_candidates.append(raw_pos)
+        else:
+            if hasattr(dataset_index, "index"):
+                try:
+                    for idx_pos in dataset_index.index.get_indexer_for([hit_id]):
+                        idx_pos_int = int(idx_pos)
+                        if idx_pos_int >= 0:
+                            pos_candidates.append(idx_pos_int)
+                except Exception:
+                    pass
+
+            if len(pos_candidates) == 0 and isinstance(hit_id, (int, np.integer)):
+                raw_pos = int(hit_id)
+                if 0 <= raw_pos < len(dataset_index):
+                    pos_candidates.append(raw_pos)
+
+        if len(pos_candidates) == 0:
+            return None
+
+        hit_pos = pos_candidates[0]
+        try:
+            hit_row = dataset_index.iloc[hit_pos]
+        except Exception:
+            return None
+
+        if isinstance(hit_row, pd.Series) and "geometry" in hit_row.index:
+            geom = hit_row["geometry"]
+        elif hasattr(hit_row, "geometry"):
+            geom = hit_row.geometry
+        else:
+            geom = hit_row
+
+        if geom is None or getattr(geom, "is_empty", False):
+            return None
+
+        minx, miny, maxx, maxy = geom.bounds
+
+        path = None
+        files = getattr(dataset, "files", None)
+        if files is not None:
+            try:
+                files_list = getattr(dataset, "_cached_files_list", None)
+                if files_list is None:
+                    files_list = list(files)
+                    setattr(dataset, "_cached_files_list", files_list)
+                if hit_pos is not None and 0 <= hit_pos < len(files_list):
+                    path = str(files_list[hit_pos])
+            except Exception:
+                path = None
+
+        return _IntersectionHit(
+            bounds=(minx, maxx, miny, maxy, default_mint, default_maxt),
+            path=path,
+        )
 
     row_df = pd.DataFrame()
     if "id" in index_df.columns:
@@ -266,10 +333,27 @@ def _hit_from_index_df(
 def query_index_hits(
     index: Any, roi: BoundingBox, dataset: Optional[Any] = None
 ) -> List[Any]:
+    raw_hits_are_positions = False
     try:
         return list(index.intersection(tuple(roi), objects=True))
     except TypeError:
-        raw_hits = list(index.intersection(tuple(roi)))
+        if hasattr(index, "sindex"):
+            try:
+                from shapely.geometry import box as shapely_box
+                raw_hits = list(
+                    index.sindex.query(
+                        shapely_box(roi.minx, roi.miny, roi.maxx, roi.maxy),
+                        predicate="intersects",
+                    )
+                )
+                raw_hits_are_positions = True
+            except Exception:
+                raw_hits = list(
+                    index.sindex.intersection((roi.minx, roi.miny, roi.maxx, roi.maxy))
+                )
+                raw_hits_are_positions = True
+        else:
+            raw_hits = list(index.intersection(tuple(roi)))
 
     hits = []
     dropped_hits = 0
@@ -283,18 +367,39 @@ def query_index_hits(
                 non_interleaved=non_interleaved,
             )
             hit_path = getattr(raw_hit, "object", None)
-            if hit_path is None and dataset is not None and hasattr(raw_hit, "id"):
-                rebuilt = _hit_from_index_df(dataset, raw_hit.id, roi.mint, roi.maxt)
-                if rebuilt is not None:
-                    hits.append(rebuilt)
+            if hit_path is None and dataset is not None:
+                if hasattr(raw_hit, "id"):
+                    rebuilt = _hit_from_index_df(
+                        dataset, raw_hit.id, roi.mint, roi.maxt
+                    )
+                    if rebuilt is not None:
+                        hits.append(rebuilt)
+                        continue
+                files = getattr(dataset, "files", None)
+                if files is not None:
+                    try:
+                        files_list = getattr(dataset, "_cached_files_list", None)
+                        if files_list is None:
+                            files_list = list(files)
+                            setattr(dataset, "_cached_files_list", files_list)
+                        if len(files_list) == 1:
+                            hit_path = str(files_list[0])
+                    except Exception:
+                        hit_path = None
+                if hit_path is None:
+                    dropped_hits += 1
                     continue
-                dropped_hits += 1
-                continue
             hits.append(_IntersectionHit(bounds=bounds, path=hit_path))
             continue
 
         if dataset is not None:
-            rebuilt = _hit_from_index_df(dataset, raw_hit, roi.mint, roi.maxt)
+            rebuilt = _hit_from_index_df(
+                dataset,
+                raw_hit,
+                roi.mint,
+                roi.maxt,
+                prefer_position=raw_hits_are_positions,
+            )
             if rebuilt is not None:
                 hits.append(rebuilt)
             else:
