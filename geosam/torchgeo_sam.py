@@ -864,25 +864,39 @@ class SamTestRasterDataset(RasterDataset):
         filepath = query['path']
         patch_size = query['size']
 
-        hits = self.index.intersection(tuple(bbox), objects=True)
-        filepaths = cast(List[str], [hit.object for hit in hits])
-
-        if not filepath in filepaths:
-            raise IndexError(
-                f"query: {bbox} not found in index with bounds: {self.bounds}"
+        try:
+            hits = self.index.intersection(tuple(bbox), objects=True)
+            filepaths = cast(
+                List[str],
+                [str(hit.object) for hit in hits if getattr(hit, "object", None) is not None],
+            )
+        except TypeError:
+            hits = query_index_hits(self.index, bbox, self)
+            filepaths = cast(
+                List[str],
+                [str(hit.object) for hit in hits if getattr(hit, "object", None) is not None],
             )
 
+        filepath_str = str(filepath)
+        if filepath_str not in filepaths:
+            abs_filepaths = {os.path.abspath(path) for path in filepaths}
+            if os.path.abspath(filepath_str) not in abs_filepaths:
+                raise IndexError(
+                    f"query: {bbox} not found in index with bounds: {self.bounds}"
+                )
+
         if self.cache:
-            vrt_fh = self._cached_load_warp_file(filepath)
+            vrt_fh = self._cached_load_warp_file(filepath_str)
         else:
-            vrt_fh = self._load_warp_file(filepath)
+            vrt_fh = self._load_warp_file(filepath_str)
 
         bounds = (bbox.minx, bbox.miny, bbox.maxx, bbox.maxy)
         band_indexes = self.band_indexes
 
         src = vrt_fh
-        out_width = round((bbox.maxx - bbox.minx) / self.res)
-        out_height = round((bbox.maxy - bbox.miny) / self.res)
+        res_x, res_y = _resolution_xy(self.res)
+        out_width = round((bbox.maxx - bbox.minx) / res_x)
+        out_height = round((bbox.maxy - bbox.miny) / res_y)
         # out_width = math.ceil((bbox.maxx - bbox.minx) / self.res)
         # out_height = math.ceil((bbox.maxy - bbox.miny) / self.res)
         count = len(band_indexes) if band_indexes else src.count
@@ -921,7 +935,7 @@ class SamTestRasterDataset(RasterDataset):
         tensor = self.pad_patch(tensor, patch_size)
 
         sample = {"crs": self.crs, "bbox": bbox,
-                  "path": filepath, "img_shape": out_shape, "input_shape": target_shape}
+                  "path": filepath_str, "img_shape": out_shape, "input_shape": target_shape}
         if self.is_image:
             sample["image"] = tensor.float()
         else:
