@@ -71,6 +71,10 @@ def _resolution_xy(res: Any) -> Tuple[float, float]:
     return val, val
 
 
+def _bbox_xyxy(bounds: BoundingBox) -> Tuple[float, float, float, float]:
+    return (bounds.minx, bounds.miny, bounds.maxx, bounds.maxy)
+
+
 def get_index_bounds(
     index_bounds: Any,
     index: Optional[Any] = None,
@@ -518,7 +522,7 @@ class SamTestGridGeoSampler(GeoSampler):
         self.length = 0
         for hit in self.hits:
             bounds = BoundingBox(*hit.bounds)
-            rows, cols = tile_to_chips(bounds, self.size, self.stride)
+            rows, cols = tile_to_chips(_bbox_xyxy(bounds), self.size, self.stride)
             self.length += rows * cols
 
         for hit in self.hits_small:
@@ -536,7 +540,7 @@ class SamTestGridGeoSampler(GeoSampler):
         for hit in self.hits + self.hits_small:
             if hit in self.hits:
                 bounds = BoundingBox(*hit.bounds)
-                rows, cols = tile_to_chips(bounds, self.size, self.stride)
+                rows, cols = tile_to_chips(_bbox_xyxy(bounds), self.size, self.stride)
                 mint = bounds.mint
                 maxt = bounds.maxt
 
