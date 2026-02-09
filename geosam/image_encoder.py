@@ -469,6 +469,25 @@ def save_sam_feature(
     patch_idx: int,
     model_type: str = "vit_h"
 ) -> int:
+    def _resolution_suffix(res: Union[float, Tuple[float, float], List[float], np.ndarray]) -> str:
+        if isinstance(res, (list, tuple, np.ndarray)):
+            if len(res) >= 2:
+                res_x = abs(float(res[0]))
+                res_y = abs(float(res[1]))
+            elif len(res) == 1:
+                res_x = abs(float(res[0]))
+                res_y = res_x
+            else:
+                res_x = 0.0
+                res_y = 0.0
+        else:
+            res_x = abs(float(res))
+            res_y = res_x
+
+        if abs(res_x - res_y) < 1e-12:
+            return f"_res_{res_x:.6f}"
+        return f"_resx_{res_x:.6f}_resy_{res_y:.6f}"
+
     # iterate over batch_size dimension
     for idx in range(feature.shape[-4]):
         band_num = feature.shape[-3]
@@ -480,8 +499,7 @@ def save_sam_feature(
         filepath = Path(data_batch['path'][idx])
         bbox_list = [bbox.minx, bbox.miny, bbox.maxx, bbox.maxy]
         bbox_str = '_'.join(map("{:.6f}".format, bbox_list))
-        extent_str = '_'.join(
-            map("{:.6f}".format, extent)) + f"_res_{raster_ds.res:.6f}"
+        extent_str = '_'.join(map("{:.6f}".format, extent)) + _resolution_suffix(raster_ds.res)
         #  Unicode-objects must be encoded before hashing with hashlib and
         #  because strings in Python 3 are Unicode by default (unlike Python 2),
         #  you'll need to encode the string using the .encode method.
