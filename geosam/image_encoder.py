@@ -270,10 +270,16 @@ class ImageEncoder:
         SamTestRasterDataset.all_bands = [
             str(i) for i in range(1, meta['count']+1)
         ]
+        src_crs = meta.get("crs")
+        if src_crs is None:
+            raise ValueError(
+                "Input raster has no CRS. Define CRS before encoding "
+                "(for example with gdal_edit.py -a_srs EPSG:xxxx)."
+            )
 
         sam_ds = SamTestRasterDataset(
             root=img_dir,
-            crs=None,
+            crs=src_crs,
             res=resolution,
             bands=bands,
             cache=False
