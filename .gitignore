@@ -7,3 +7,9 @@ geosam/__pycache__
 build/*
 dist/*
 GeoSAM_Image_Encoder.egg-info/*
+
+
+# Planning with files
+findings.md
+progress.md
+task_plan.md

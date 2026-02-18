@@ -1,171 +1,162 @@
 # GeoSAM-Image-Encoder
 
-[![PyPI Version](https://img.shields.io/pypi/v/GeoSAM-Image-Encoder)](https://pypi.org/project/GeoSAM-Image-Encoder/) [![Downloads](https://static.pepy.tech/badge/GeoSAM-Image-Encoder)](https://pepy.tech/project/GeoSAM-Image-Encoder) [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/coolzhao/Geo-SAM/blob/main/GeoSAM-Image-Encoder/examples/geosam-image-encoder.ipynb)
+[![PyPI Version](https://img.shields.io/pypi/v/GeoSAM-Image-Encoder)](https://pypi.org/project/GeoSAM-Image-Encoder/)
+[![Downloads](https://static.pepy.tech/badge/GeoSAM-Image-Encoder)](https://pepy.tech/project/GeoSAM-Image-Encoder)
+[![Run in Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/atsyplenkov/GeoSAM-Image-Encoder/blob/main/examples/Geo-SAM_encoding.ipynb)
 
+This repository is a fork of the Geo-SAM image encoder package. It remains a standalone Python package (no QGIS dependency) for encoding geospatial rasters into SAM features that can be consumed by Geo-SAM workflows.
 
-This package is part of the [Geo-SAM](https://github.com/coolzhao/Geo-SAM) project and is a standalone Python package that does not depend on QGIS. This package allows you to **encode remote sensing images into features that can be recognized by Geo-SAM using a remote server**, such as ``Colab``, ``AWS``, ``Azure`` or your own ``HPC``.
+## Upstream Context
+
+- Upstream project: [coolzhao/Geo-SAM](https://github.com/coolzhao/Geo-SAM)
+- This fork is focused on Colab-friendly usage and bug fixes around raster indexing, bounds handling, CRS usage, and output naming.
+- License: [LICENSE](LICENSE)
+
+## Fork Changes
+
+Recent updates in this fork include:
+
+- Added a Colab notebook example at `examples/Geo-SAM_encoding.ipynb`.
+- Improved sampler/index compatibility handling in `geosam/torchgeo_sam.py`.
+- Improved geopandas/index fallback behavior in `geosam/torchgeo_sam.py`.
+- Added tuple-resolution handling in sampling/export logic (`geosam/torchgeo_sam.py`, `geosam/image_encoder.py`).
+- Ensured source CRS is passed into dataset creation in `geosam/image_encoder.py`.
+- Updated feature export naming to include hashed extent/resolution context in `geosam/image_encoder.py`.
 
 ## Installation
 
-You can install `GeoSAM-Image-Encoder` via pip.
+### Recommended (this fork, pinned)
 
-``` BASH
+```bash
+pip install -U git+https://github.com/atsyplenkov/GeoSAM-Image-Encoder.git@f55e888
+```
+
+### PyPI release
+
+```bash
 pip install GeoSAM-Image-Encoder
-# or
-pip install git+https://github.com/Fanchengyan/GeoSAM-Image-Encoder.git
 ```
 
-### GPU Version
+### GPU note
 
-`GeoSAM-Image-Encoder` supports using GPU to accelerate the encoding process. If your PC has NVIDIA GPUs, you need to download and install the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) first.
+Install a PyTorch build that matches your hardware and CUDA/ROCm setup before installing this package:
+<https://pytorch.org/get-started/locally/>
 
-Then install the gpu-version pytorch using the following command (here CUDA 11.7 as an example):
+## Google Colab Quickstart
 
-``` BASH
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
-```
+Use the badge above or open:
+<https://colab.research.google.com/github/atsyplenkov/GeoSAM-Image-Encoder/blob/main/examples/Geo-SAM_encoding.ipynb>
 
+Typical Colab flow:
 
-## Usage
+1. Install this fork.
+2. Download a SAM checkpoint (for example `sam_vit_l_0b3195.pth`).
+3. Mount Google Drive and set input/output paths.
+4. Run the encoder in Python.
 
-There are **two ways** to use GeoSAM-Image-Encoder. You can call it in Python or Terminal. We recommend using Python interface directly which will have greater flexibility.
-
-### Using Python
-
-After install GeoSAM-Image-Encoder, you can import it using `geosam`
+## Python Usage
 
 ```python
 import geosam
 from geosam import ImageEncoder
+
+print(geosam.gpu_available())
 ```
 
-check if gpu available
+### Direct parameters
 
 ```python
-geosam.gpu_available()
+checkpoint_path = "/content/sam_vit_l_0b3195.pth"
+image_path = "/content/drive/MyDrive/input.tif"
+feature_dir = "/content/drive/MyDrive/features"
+
+encoder = ImageEncoder(
+    checkpoint_path=checkpoint_path,
+    model_type="vit_l",
+    batch_size=1,
+    gpu=True,
+    gpu_id=0,
+)
+
+encoder.encode_image(
+    image_path=image_path,
+    feature_dir=feature_dir,
+    bands=[1, 2, 3],
+    stride=512,
+    value_range=(0.0, 255.0),
+    resolution=0.25,
+)
 ```
 
-#### Run by specify parameters directly
-
-If you want to specify the parameters directly, you can run it like this:
+### Using `settings.json` exported by Geo-SAM
 
 ```python
-checkpoint_path = '/content/sam_vit_l_0b3195.pth'
-image_path = '/content/beiluhe_google_img_201211_clip.tif'
-feature_dir = './'
+import geosam
+from geosam import ImageEncoder
 
-## init ImageEncoder
-img_encoder = ImageEncoder(checkpoint_path)
-## encode image
-img_encoder.encode_image(image_path,feature_dir)
-```
+settings = geosam.parse_settings_file("/content/setting.json")
+settings.update({"feature_dir": "/content/features"})
 
-#### Run by parameters from setting.json file
-
-If you want to using `settings.json` file which exported from Geo-SAM plugin to provide parameters, you can run it like this:
-
-```python
-setting_file = "/content/setting.json"
-feature_dir = './'
-
-### parse settings from the setting,json file
-settings = geosam.parse_settings_file(setting_file)
-
-### setting file not contains feature_dir, you need add it
-settings.update({"feature_dir":feature_dir})
-
-### split settings into init_settings, encode_settings
 init_settings, encode_settings = geosam.split_settings(settings)
 
-print(f"settings: {settings}")
-print(f"init_settings: {init_settings}")
-print(f"encode_settings: {encode_settings}")
+encoder = ImageEncoder(**init_settings)
+encoder.encode_image(**encode_settings)
 ```
 
-Then, you can run image encoding by parameters from `setting.json` file
+## CLI Usage
 
-```python
-img_encoder = ImageEncoder(**init_settings)
-img_encoder.encode_image(**encode_settings)
-```
-
-### Using Terminal
-
-
-check the folder of geosam
-
-```python
-print(geosam.folder)
-```
-
-add this folder into environment of your machine. Then run in terminal:
+The recommended CLI entrypoint after installation is module execution:
 
 ```bash
-image_encoder.py -i /content/beiluhe_google_img_201211_clip.tif -c /content/sam_vit_l_0b3195.pth -f ./
+python -m geosam.image_encoder -h
 ```
 
-You can overwrite the settings from file by specify the parameter values. For Example
+Direct parameters:
 
 ```bash
-image_encoder.py -s /content/setting.json  -f ./ --stride 256 --value_range "10,255"
+python -m geosam.image_encoder \
+  -i /path/to/image.tif \
+  -c /path/to/sam_vit_l_0b3195.pth \
+  -f /path/to/output_features
 ```
 
-check all available parameters:
+Using settings file (with optional overrides):
 
 ```bash
-image_encoder.py -h
+python -m geosam.image_encoder \
+  -s /path/to/setting.json \
+  -f /path/to/output_features \
+  --stride 256 \
+  --value_range "(10,255)"
 ```
 
-```
-This script is for encoding image to SAM features.
+Supported options are:
 
-=====
-Usage
-=====
-using settings.json:
+- `-s`, `--settings`
+- `-i`, `--image_path`
+- `-c`, `--checkpoint_path`
+- `-f`, `--feature_dir`
+- `--model_type`
+- `--bands`
+- `--stride`
+- `--extent`
+- `--value_range`
+- `--resolution`
+- `--batch_size`
+- `--gpu_id`
 
-    image_encoder.py -s <settings.json> -f <feature_dir>
- 
- 
-or directly using parameters:
- 
-    image_encoder.py -i <image_path> -c <checkpoint_path> -f <feature_dir>
-    
-All Parameters:
--------------------
--s, --settings:         Path to the settings json file.
--i, --image_path:       Path to the input image.
--c, --checkpoint_path:  Path to the SAM checkpoint.
--f, --feature_dir:      Path to the output feature directory.
---model_type: one of ["vit_h", "vit_l", "vit_b"] or [0, 1, 2] or None, optional
-    The type of the SAM model. If None, the model type will be 
-    inferred from the checkpoint path. Default: None. 
---bands: list of int, optional .
-    The bands to be used for encoding. Should not be more than three bands.
-    If None, the first three bands (if available) will be used. Default: None.
---stride: int, optional
-    The stride of the sliding window. Default: 512.
---extent: str, optional
-    The extent of the image to be encoded. Should be in the format of
-    "minx, miny, maxx, maxy, [crs]". If None, the extent of the input
-    image will be used. Default: None.
---value_range: tuple of float, optional
-    The value range of the input image. If None, the value range will be
-    automatically calculated from the input image. Default: None.
---resolution: float, optional
-    The resolution of the output feature in the unit of raster crs.
-    If None, the resolution of the input image will be used. Default: None.
---batch_size: int, optional
-    The batch size for encoding. Default: 1.
---gpu_id: int, optional
-    The device id of the GPU to be used. Default: 0.
+## Input/Output Notes
 
-```
+- Input bands: SAM encoding supports at most 3 bands. If fewer than 3 are provided, bands are repeated to 3 internally.
+- Input CRS: the raster must have a valid CRS. Encoding fails for CRS-less rasters.
+- Model type: `vit_h`, `vit_l`, and `vit_b` are supported (or integer aliases `0`, `1`, `2`).
+- Output layout: features are written under:
+  - `<feature_dir>/<image_stem>/sam_feat_<model_type>_bands_<bands>_<extent_hash>/`
+  - Per patch: `sam_feat_<model_type>_<bbox_hash>.tif`
+  - Per folder index: `<folder_name>.csv`
 
-## Colob Example
+## Troubleshooting
 
-
-You can click on the link below to experience GeoSAM-Image-Encoder in `Colab`: 
-
-<https://colab.research.google.com/github/coolzhao/Geo-SAM/blob/dev/GeoSAM-Image-Encoder/examples/geosam-image-encoder.ipynb>
-
+- `Could not infer the model type from the checkpoint path`: set `model_type` explicitly.
+- `Input raster has no CRS`: assign CRS before encoding.
+- No GPU available: encoder automatically falls back to CPU (batch size effectively reduced for CPU path).
